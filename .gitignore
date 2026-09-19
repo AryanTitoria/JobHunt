@@ -3,7 +3,7 @@
 
 # your actual resume and the profile derived from it
 resume.*
-my_resume.pdf
+resume_pwp.pdf
 profile.json
 !profile.example.json
 # generated output
