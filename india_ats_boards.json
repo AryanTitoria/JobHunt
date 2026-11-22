@@ -1,0 +1,17 @@
+[
+  {
+    "ats": "lever",
+    "slug": "hevodata",
+    "name": "Hevo Data"
+  },
+  {
+    "ats": "lever",
+    "slug": "weekdayworks",
+    "name": "Weekday (client vacancies)"
+  },
+  {
+    "ats": "smartrecruiters",
+    "slug": "Freshworks",
+    "name": "Freshworks"
+  }
+]

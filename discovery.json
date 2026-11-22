@@ -1,0 +1,31 @@
+{
+  "titles": [
+    "software engineer",
+    "backend engineer",
+    "data engineer"
+  ],
+  "locations": [
+    "India"
+  ],
+  "seed_urls": [],
+  "remotive": true,
+  "arbeitnow": true,
+  "arbeitnow_pages": 2,
+  "rss": [],
+  "jobicy": true,
+  "jobicy_pages": 2,
+  "remoteok": true,
+  "himalayas": true,
+  "himalayas_pages": 3,
+  "adzuna": {
+    "enabled": false,
+    "country": "in",
+    "max_queries": 2,
+    "max_pages": 1
+  },
+  "usajobs": {
+    "enabled": false,
+    "max_queries": 2,
+    "max_pages": 1
+  }
+}

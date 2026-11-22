@@ -1,0 +1,20 @@
+Alex Sample
+Software Engineer
+
+Software engineer with 2 years of experience building Python services and web products.
+Skills: Python, Django, JavaScript, SQL, PostgreSQL, Git, Docker, REST APIs
+
+Experience
+Software Developer, Example Product Studio, 2024–2026
+Built Python APIs using Django and PostgreSQL for an internal product catalog.
+Added automated tests and used Git for code reviews and release coordination.
+Containerized a development environment using Docker to simplify onboarding.
+
+Projects
+Built a resume-based job search prototype with Python and REST APIs.
+Designed a small JavaScript dashboard to show project metrics and search results.
+
+Education
+Bachelor of Technology in Computer Science, Example University, 2024.
+
+This resume is fictional and supplied only for demonstrating JobSearch.

@@ -1,0 +1,21 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Find jobs that fit your background, understand the gaps, and tailor your resume with JobSearch."><title>{% block title %}JobSearch — Make your next move{% endblock %}</title><link rel="stylesheet" href="{% static 'JobSearch/app.css' %}"><script defer src="{% static 'JobSearch/app.js' %}"></script></head>
+<body {% if pending_tasks %}data-poll="true" data-poll-url="{% url 'task-status' %}"{% endif %}>
+<a class="skip-link" href="#main">Skip to content</a>
+{% if user.is_authenticated %}
+<div class="app-shell"><aside class="sidebar"><a class="wordmark" href="{% url 'jobs' %}"><span class="brand-symbol">JS</span>JobSearch<span class="brand-dot">.</span></a><span class="workspace-label">YOUR WORKSPACE</span><nav aria-label="Main navigation">
+<a class="nav-link {% if request.resolver_match.url_name == 'jobs' or request.resolver_match.url_name == 'job-detail' %}active{% endif %}" href="{% url 'jobs' %}"><span class="nav-icon">▦</span> Discover jobs</a>
+<a class="nav-link" href="{% url 'jobs' %}?tab=saved"><span class="nav-icon">◇</span> Saved jobs</a>
+<a class="nav-link" href="{% url 'jobs' %}?tab=seen"><span class="nav-icon">◉</span> Viewed jobs</a>
+<a class="nav-link {% if request.resolver_match.url_name == 'resume' %}active{% endif %}" href="{% url 'resume' %}"><span class="nav-icon">▤</span> Resume reference</a>
+<a class="nav-link {% if request.resolver_match.url_name == 'profile' %}active{% endif %}" href="{% url 'profile' %}"><span class="nav-icon">⚙</span> Search questionnaire</a>
+<a class="nav-link {% if request.resolver_match.url_name == 'sources' %}active{% endif %}" href="{% url 'sources' %}"><span class="nav-icon">◎</span> Job sources</a>
+</nav><div class="sidebar-note"><span class="tiny-label">A LITTLE CLARITY GOES A LONG WAY</span><p>Find your fit.<br>Make your next move.</p><span class="small muted">Your career, at your pace.</span></div><div class="account"><a class="account-profile" href="{% url 'profile' %}" aria-label="Open profile and search preferences"><span class="avatar">{{ user.username|first|upper }}</span><span class="account-identity"><strong>{{ user.username }}</strong><span class="small muted">Profile & preferences →</span></span></a><form method="post" action="{% url 'logout' %}" class="account-signout">{% csrf_token %}<button type="submit" class="account-signout-button">Sign out</button></form></div></aside>
+<div class="app-content"><header class="topbar"><button type="button" class="mobile-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" data-nav-toggle>☰</button><span>Workspace <span class="crumb">/</span> {% block breadcrumb %}Discover{% endblock %}</span><div><span class="status-dot"></span> {% if demo_mode %}Demo workspace{% else %}Your next chapter starts here{% endif %}</div></header>
+{% else %}<header class="public-header"><a class="wordmark" href="{% url 'home' %}"><span class="brand-symbol">JS</span>JobSearch<span class="brand-dot">.</span></a><nav aria-label="Account"><a href="{% url 'login' %}">Sign in</a><a class="button dark small-button" href="{% url 'signup' %}">Get started <span>↗</span></a></nav></header>{% endif %}
+<div class="navigation-progress" aria-hidden="true"></div><main id="main" class="{% if user.is_authenticated %}workspace-main{% else %}public-main{% endif %}">
+{% if messages %}<div class="messages" role="status">{% for message in messages %}<div class="alert {{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+{% if demo_mode %}<div class="demo-banner">DEMONSTRATION MODE <span>Job listings are fictional and clearly labelled. No offline AI model is used.</span></div>{% endif %}
+{% block content %}{% endblock %}</main>
+{% if user.is_authenticated %}</div></div>{% else %}<footer class="public-footer"><span class="wordmark small-wordmark">JobSearch.</span><span>A clearer path from your experience to your next opportunity.</span><span>Built on JobHunt</span></footer>{% endif %}
+</body></html>
