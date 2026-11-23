@@ -31,17 +31,17 @@ def main():
     django.setup()
     from django.core.management import call_command
     from django.db import close_old_connections, connections
-    from careers.services.queue import claim, execute
+    from careers.services.queue import claim, execute, INTERACTIVE_KINDS
     call_command('migrate', interactive=False, verbosity=0)
     if os.getenv('DEMO_MODE', '').lower() == 'true':
         call_command('load_demo')
     stop = threading.Event()
-    def worker_loop():
+    def worker_loop(kinds):
         try:
             while not stop.is_set():
                 close_old_connections()
                 try:
-                    task = claim()
+                    task = claim(kinds=kinds)
                     if task:
                         execute(task)
                         continue
@@ -51,8 +51,9 @@ def main():
                 stop.wait(1)
         finally:
             connections.close_all()
-    worker = threading.Thread(target=worker_loop, name='JobSearch-development-worker', daemon=True)
-    worker.start()
+    workers=[threading.Thread(target=worker_loop,args=(INTERACTIVE_KINDS,),name='JobSearch-interactive-worker',daemon=True),
+             threading.Thread(target=worker_loop,args=(('collect',),),name='JobSearch-collection-worker',daemon=True)]
+    for worker in workers:worker.start()
     print(f'\nJobSearch: http://127.0.0.1:{options.port}\nCreate an account, answer the search questionnaire, then add master resumes. Ctrl+C stops the app and worker.\n', flush=True)
     try:
         call_command('runserver', f'127.0.0.1:{options.port}', use_reloader=False)
@@ -60,7 +61,7 @@ def main():
         pass
     finally:
         stop.set()
-        worker.join(timeout=5)
+        for worker in workers:worker.join(timeout=5)
         connections.close_all()
     return 0
 

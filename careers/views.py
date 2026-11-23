@@ -12,7 +12,9 @@ from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError, OperationalError
 from django.db.models import Q, Exists, OuterRef, F
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, Http404
+from urllib.parse import urlencode
+from uuid import UUID
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -168,23 +170,31 @@ def jobs(request):
     return render(request, 'careers/jobs.html', context)
 
 
-def _job_and_resume(user, job_id):
+def _job_and_resume(user, job_id, resume_id=None):
     job = get_object_or_404(Job.objects.prefetch_related('sightings__source'), pk=job_id)
-    resume = current_resume(user)
+    if resume_id:
+        try: parsed_id=UUID(str(resume_id))
+        except ValueError: raise Http404('Resume not found')
+        resume=get_object_or_404(Resume,user=user,pk=parsed_id)
+    else:resume = current_resume(user)
     return job, resume
 
 
 def _analysis(user, job, resume):
-    preferences, _ = Preferences.objects.get_or_create(user=user)
-    analysis, _ = Analysis.objects.get_or_create(user=user, job=job, resume=resume, job_hash=job.content_hash,
-        defaults={'result': basic_guidance(job, resume, preferences)})
-    return analysis
+    from .services.reviews import analysis_for
+    return analysis_for(user,job,resume)
+
+
+def _detail_response(job,resume,explicit=False):
+    url=reverse('job-detail',kwargs={'job_id':job.pk})
+    if explicit and resume:url+='?'+urlencode({'resume':str(resume.pk)})
+    return redirect(url)
 
 
 @login_required
 @require_POST
 def open_job(request, job_id):
-    job, resume = _job_and_resume(request.user, job_id)
+    job, resume = _job_and_resume(request.user, job_id, request.POST.get('resume') or request.GET.get('resume'))
     preferences, _ = Preferences.objects.get_or_create(user=request.user)
     state, _ = JobState.objects.get_or_create(user=request.user, job=job)
     if state.seen_at is None:
@@ -193,42 +203,56 @@ def open_job(request, job_id):
     analysis = _analysis(request.user, job, resume) if resume else None
     if analysis and preferences.ai_consent and ai.configured_providers() and analysis.method != 'ai' and not analysis.notice:
         enqueue('analysis', request.user, {'job': str(job.pk), 'resume': str(resume.pk)},
-                key=f'analysis:{request.user.pk}:{resume.pk}:{job.pk}:{job.content_hash[:12]}')
-    return redirect('job-detail', job_id=job.pk)
+                key=f'analysis:{request.user.pk}:{resume.pk}:{job.pk}:{analysis.input_signature[:12]}')
+    return _detail_response(job,resume,bool(request.POST.get('resume')))
 
 
 @login_required
 def job_detail(request, job_id):
-    job, resume = _job_and_resume(request.user, job_id)
+    job, resume = _job_and_resume(request.user, job_id, request.POST.get('resume') or request.GET.get('resume'))
     preferences, _ = Preferences.objects.get_or_create(user=request.user)
     analysis = _analysis(request.user, job, resume) if resume else None
     state = JobState.objects.filter(user=request.user, job=job).first()
     preferences = request.user.preferences
     from .services.interpretation import selected_interpretation
     parsed=selected_interpretation(request.user,job)
-    pending = Task.objects.filter(user=request.user, kind__in=['analysis','tailor','interpret'], status__in=['queued', 'running'], payload__job=str(job.pk)).exists()
+    relevant=Task.objects.filter(user=request.user,kind__in=['analysis','tailor','interpret'],status__in=['queued','running'],payload__job=str(job.pk))
+    relevant=relevant.filter(~Q(kind='analysis')|Q(payload__resume=str(resume.pk))) if resume else relevant.exclude(kind='analysis')
+    pending=relevant.exists()
+    review_task=Task.objects.filter(user=request.user,kind='analysis',payload__job=str(job.pk),payload__resume=str(resume.pk) if resume else '').order_by('-created').first()
+    analysis_pending=bool(review_task and review_task.status in ['queued','running'])
     return render(request, 'careers/detail.html', {'job': job, 'resume': resume, 'analysis': analysis,
+        'compatibility':analysis.compatibility if analysis else None, 'resume_options':request.user.resumes.all(),
+        'review_task':review_task,'analysis_pending':analysis_pending,
+        'poll_url':reverse('task-status')+'?'+urlencode({'job':str(job.pk),'resume':str(resume.pk) if resume else ''}),
         'state': state, 'match': evaluate(job, resume, preferences), 'pending_tasks': pending,
-        'usage': ai.usage(request.user), 'preferences': preferences,
-        'parsed_job':parsed.result, 'tailoring_form':TailoringForm(user=request.user), 'tailored_drafts':TailoredResume.objects.filter(user=request.user,job=job).order_by('-created')[:4],
+        'usage': ai.usage(request.user), 'preferences': preferences, 'ai_available':bool(ai.configured_providers()),
+        'parsed_job':parsed.result, 'tailoring_form':TailoringForm(user=request.user,initial={'masters':[resume.pk]} if resume else None), 'tailored_drafts':TailoredResume.objects.filter(user=request.user,job=job).order_by('-created')[:4],
         'source_sightings': job.sightings.select_related('source').all()})
 
 
 @login_required
 @require_POST
 def request_review(request, job_id):
-    job, resume = _job_and_resume(request.user, job_id)
-    if not resume: return redirect('resume')
+    job,resume=_job_and_resume(request.user,job_id,request.POST.get('resume'))
+    if not resume:return redirect('resume')
     if not request.user.preferences.ai_consent:
-        messages.info(request, 'Enable hosted AI in Profile before requesting a detailed review.')
+        messages.info(request,'Enable hosted AI in Search preferences before requesting a review.')
         return redirect('profile')
-    if limited(request, 'review', 10): return HttpResponse('Please wait before requesting another review.', status=429)
-    analysis = _analysis(request.user, job, resume)
-    if analysis.method != 'ai':
-        enqueue('analysis', request.user, {'job': str(job.pk), 'resume': str(resume.pk)},
-                key=f'analysis:{request.user.pk}:{resume.pk}:{job.pk}:{job.content_hash[:12]}')
-        messages.success(request, 'Detailed review queued. You can keep browsing while it runs.')
-    return redirect('job-detail', job_id=job.pk)
+    analysis=_analysis(request.user,job,resume)
+    if analysis.method=='ai':
+        messages.success(request,'Loaded the cached AI review for this exact resume and job.')
+        return _detail_response(job,resume,bool(request.POST.get('resume')))
+    if not ai.configured_providers():
+        analysis.notice='No hosted AI provider is configured on this installation. Your compatibility breakdown and factual draft remain available.'
+        analysis.save(update_fields=['notice'])
+        return _detail_response(job,resume,bool(request.POST.get('resume')))
+    if limited(request,'review',10):return HttpResponse('Please wait before requesting another review.',status=429)
+    analysis.notice='';analysis.save(update_fields=['notice'])
+    enqueue('analysis',request.user,{'job':str(job.pk),'resume':str(resume.pk)},
+        key=f'analysis:{request.user.pk}:{resume.pk}:{job.pk}:{analysis.input_signature[:12]}')
+    messages.success(request,'AI review queued for '+resume.filename+'. Collection runs separately; you can keep browsing.')
+    return _detail_response(job,resume,bool(request.POST.get('resume')))
 
 
 @login_required
@@ -259,9 +283,14 @@ def refresh_jobs(request):
 
 @login_required
 def task_status(request):
-    tasks = Task.objects.filter(user=request.user).order_by('-created')[:5]
-    return JsonResponse({'tasks': [{'id': str(t.pk), 'status': t.status, 'message': t.message,
-                                   'kind': t.kind} for t in tasks]})
+    tasks=Task.objects.filter(user=request.user)
+    if request.GET.get('job'):
+        tasks=tasks.filter(payload__job=request.GET['job'])
+        if request.GET.get('resume'):
+            tasks=tasks.filter(~Q(kind='analysis')|Q(payload__resume=request.GET['resume']))
+    pending_count=tasks.filter(status__in=['queued','running']).count()
+    return JsonResponse({'pending_count':pending_count,'tasks':[{'id':str(task.pk),'status':task.status,
+        'message':task.message,'kind':task.kind} for task in tasks.order_by('-created')[:8]]})
 
 
 @login_required
@@ -315,8 +344,9 @@ def create_tailored(request,job_id):
     from .services.tailoring import tailor
     masters=form.cleaned_data['masters']
     draft=tailor(request.user,job,masters,False)
-    if form.cleaned_data['use_ai']:
-        if not request.user.preferences.parser_ai_consent:
+    use_ai=form.cleaned_data['use_ai'] or request.POST.get('mode')=='ai'
+    if use_ai:
+        if not (request.user.preferences.parser_ai_consent or request.user.preferences.ai_consent):
             messages.info(request,'Enable optional parser/selection AI in the questionnaire first. A source-preserving draft is ready.')
         else:
             enqueue('tailor',request.user,{'job':str(job.pk),'masters':[str(master.pk) for master in masters]},key=f'tailor:{draft.key}')
@@ -329,21 +359,29 @@ def tailored_detail(request,draft_id):
     if request.user.resumes.filter(pk__in=draft.master_ids).count()!=len(draft.master_ids):
         draft.delete()
         return redirect('resume')
+    newer=TailoredResume.objects.filter(user=request.user,job=draft.job,master_ids=draft.master_ids,created__gt=draft.created).order_by('-created').first()
+    if newer:
+        url=reverse('tailored-detail',kwargs={'draft_id':newer.pk})
+        if request.GET.get('format'):url+='?'+urlencode({'format':request.GET['format']})
+        return redirect(url)
     if request.GET.get('format')=='json':
         response=JsonResponse(draft.result,json_dumps_params={'indent':2})
         response['Content-Disposition']='attachment; filename="JobSearch-tailored-resume.json"'
         return response
-    newer=TailoredResume.objects.filter(user=request.user,job=draft.job,master_ids=draft.master_ids,created__gt=draft.created).order_by('-created').first()
-    if newer:return redirect('tailored-detail',draft_id=newer.pk)
+    if request.GET.get('format')=='pdf':
+        from .services.pdf_resume import render_pdf
+        response=HttpResponse(render_pdf(draft),content_type='application/pdf')
+        response['Content-Disposition']='attachment; filename="JobSearch-tailored-resume.pdf"'
+        return response
     pending=Task.objects.filter(user=request.user,kind='tailor',status__in=['queued','running'],payload__job=str(draft.job_id)).exists()
-    return render(request,'careers/tailored.html',{'draft':draft,'sources':draft.sources['items'],'masters':draft.sources['masters'], 'pending_tasks':pending})
+    return render(request,'careers/tailored.html',{'draft':draft,'sources':draft.sources['items'],'masters':draft.sources['masters'], 'pending_tasks':pending,'poll_url':reverse('task-status')+'?'+urlencode({'job':str(draft.job_id)})})
 
 
 @login_required
 @require_POST
 def interpret_job(request,job_id):
     job=get_object_or_404(Job,pk=job_id)
-    if request.user.preferences.parser_ai_consent:
+    if request.user.preferences.parser_ai_consent or request.user.preferences.ai_consent:
         enqueue('interpret',request.user,{'job':str(job.pk)},key=f'interpret:{request.user.pk}:{job.pk}:{job.content_hash[:12]}')
         messages.success(request,'Optional interpretation queued. Unstated requirements remain unknown unless supported by the posting.')
     else:messages.info(request,'Enable optional parser AI in your questionnaire to use this feature.')

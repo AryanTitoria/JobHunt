@@ -1,5 +1,6 @@
 from datetime import timedelta
 from django.db import IntegrityError, transaction
+from django.db.models import Case, When, Value, IntegerField
 from django.utils import timezone
 from careers.models import Task
 import logging
@@ -20,12 +21,20 @@ def enqueue(kind, user=None, payload=None, key=None):
         return Task.objects.get(active_key=key)
 
 
-def claim():
+INTERACTIVE_KINDS = ('analysis','tailor','interpret','match')
+
+
+def claim(kinds=None):
     # The compare-and-update claim works with SQLite and PostgreSQL.
     stale = timezone.now() - timedelta(minutes=30)
     Task.objects.filter(status='running', started__lt=stale).update(
         status='failed', active_key=None, finished=timezone.now(), message='Worker stopped. Please retry.')
-    for task in Task.objects.filter(status='queued')[:20]:
+    candidates=Task.objects.filter(status='queued')
+    if kinds is not None:
+        candidates=candidates.filter(kind__in=kinds).order_by('-created')
+    else:
+        candidates=candidates.annotate(lane=Case(When(kind__in=INTERACTIVE_KINDS,then=Value(0)),default=Value(1),output_field=IntegerField())).order_by('lane','created')
+    for task in candidates[:20]:
         if Task.objects.filter(pk=task.pk, status='queued').update(status='running', started=timezone.now()):
             task.refresh_from_db()
             return task
@@ -64,8 +73,8 @@ def execute(task):
             resume = Resume.objects.get(pk=task.payload['resume'], user=task.user)
             job = Job.objects.get(pk=task.payload['job'])
             preferences = Preferences.objects.get(user=task.user)
-            analysis, _ = Analysis.objects.get_or_create(user=task.user, resume=resume, job=job,
-                job_hash=job.content_hash, defaults={'result': basic_guidance(job, resume, preferences)})
+            from .reviews import analysis_for
+            analysis=analysis_for(task.user,job,resume)
             if analysis.method == 'ai':
                 message = 'Loaded your cached resume review.'
             else:
@@ -74,7 +83,8 @@ def execute(task):
                 except AIUnavailable as error:
                     analysis.notice = str(error)[:300]
                     analysis.save(update_fields=['notice'])
-                    message = str(error)
+                    Task.objects.filter(pk=task.pk).update(status='failed',active_key=None,finished=timezone.now(),message=str(error)[:300])
+                    return False
                 else:
                     analysis.result, analysis.method = result, 'ai'
                     analysis.provider, analysis.model, analysis.notice = provider, model, ''

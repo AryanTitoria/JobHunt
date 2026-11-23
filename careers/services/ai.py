@@ -60,7 +60,7 @@ def _request(provider, model, prompt, system_override=None):
             headers={'x-goog-api-key': os.environ[KEYS[provider]]},
             json={'system_instruction': {'parts': [{'text': system}]},
                   'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
-                  'generationConfig': {'responseMimeType': 'application/json', 'maxOutputTokens': 2500}},
+                  'generationConfig': {'responseMimeType': 'application/json', 'maxOutputTokens': 4000 if system_override else 2500}},
             timeout=(5, 35))
     else:
         base = 'https://api.openai.com/v1' if provider == 'openai' else 'https://api.groq.com/openai/v1'
@@ -68,7 +68,7 @@ def _request(provider, model, prompt, system_override=None):
             headers={'Authorization': 'Bearer ' + os.environ[KEYS[provider]]},
             json={'model': model, 'messages': [{'role': 'system', 'content': system},
                  {'role': 'user', 'content': prompt}], 'response_format': {'type': 'json_object'},
-                 'max_completion_tokens': 2500}, timeout=(5, 35))
+                 'max_completion_tokens': 4000 if system_override else 2500}, timeout=(5, 35))
     if response.status_code != 200:
         cooldown = 900 if response.status_code == 429 else 120
         if response.status_code in {401, 403}: cooldown = 3600
@@ -76,7 +76,8 @@ def _request(provider, model, prompt, system_override=None):
         if value.isdigit(): cooldown = min(86400, max(cooldown, int(value)))
         ProviderHealth.objects.update_or_create(name=provider, defaults={
             'cooldown_until': timezone.now() + timedelta(seconds=cooldown), 'reason': f'HTTP {response.status_code}'})
-        raise AIUnavailable(f'{provider} is temporarily unavailable or rate limited')
+        reason={401:'authentication failed; the installation key needs checking',403:'access denied for the configured model/key',404:'configured model not found or not supported',429:'provider quota or rate limit reached; wait before retrying'}.get(response.status_code,'provider temporarily unavailable; try again later')
+        raise AIUnavailable(f'{provider}: {reason}.')
     body = response.json()
     if provider == 'gemini':
         text = ''.join(p.get('text', '') for p in body['candidates'][0]['content']['parts'] if not p.get('thought'))
@@ -145,13 +146,13 @@ def review(user, resume, job, preferences):
         event = AIEvent.objects.create(user=user, provider=provider, model=model, outcome='started', reserved_tokens=estimated)
         try:
             result = validate_review(_request(provider, model, prompt), resume_text)
-        except (AIUnavailable, requests.RequestException, ValueError, TypeError, KeyError, IndexError):
+        except (AIUnavailable, requests.RequestException, ValueError, TypeError, KeyError, IndexError) as error:
             event.outcome = 'unavailable'
             event.save(update_fields=['outcome'])
             if not ProviderHealth.objects.filter(name=provider, cooldown_until__gt=timezone.now()).exists():
                 ProviderHealth.objects.update_or_create(name=provider, defaults={
                     'cooldown_until': timezone.now() + timedelta(minutes=2), 'reason': 'request or validation failed'})
-            last_error = f'{provider} could not complete a grounded review. Basic guidance remains available.'
+            last_error = str(error) if isinstance(error,AIUnavailable) else f'{provider} returned an unavailable or invalid review. Please retry later; your compatibility report remains ready.'
             continue
         event.outcome = 'success'
         event.save(update_fields=['outcome'])
@@ -161,21 +162,26 @@ def review(user, resume, job, preferences):
 
 def bounded_json(user, preferences, prompt, system):
     """Explicit consent and the existing shared quotas apply to parser/selection AI."""
-    if not preferences.parser_ai_consent:
-        raise AIUnavailable('Parser AI is disabled.')
+    if not (preferences.parser_ai_consent or preferences.ai_consent):
+        raise AIUnavailable('Hosted assistance is disabled in your preferences.')
     providers=configured_providers()
+    last_error='No available hosted provider is configured or providers are cooling down. A factual draft remains available.'
     if not preferences.fallback_consent: providers=providers[:1]
     for provider in providers:
         if ProviderHealth.objects.filter(name=provider,cooldown_until__gt=timezone.now()).exists(): continue
         model=settings.AI_MODELS[provider]
-        reserve(user,provider,math.ceil(len(prompt)/3)+2500)
+        reserve(user,provider,math.ceil(len(prompt)/3)+4000)
         event=AIEvent.objects.create(user=user,provider=provider,model=model,outcome='started')
         try:
             result=_request(provider,model,prompt,system_override=system)
             if not isinstance(result,dict): raise ValueError('Expected JSON object')
-        except (AIUnavailable,requests.RequestException,ValueError,TypeError,KeyError,IndexError):
+        except (AIUnavailable,requests.RequestException,ValueError,TypeError,KeyError,IndexError) as error:
+            last_error=str(error) if isinstance(error,AIUnavailable) else f'{provider} could not return a valid composition. A factual draft remains available.'
+            if not ProviderHealth.objects.filter(name=provider,cooldown_until__gt=timezone.now()).exists():
+                ProviderHealth.objects.update_or_create(name=provider,defaults={'cooldown_until':timezone.now()+timedelta(minutes=2),'reason':'request or validation failed'})
             event.outcome='unavailable';event.save(update_fields=['outcome'])
             continue
         event.outcome='success';event.save(update_fields=['outcome'])
+        result['_provider']=provider;result['_model']=model
         return result
-    raise AIUnavailable('Hosted interpretation unavailable; source-preserving rules remain available.')
+    raise AIUnavailable(last_error)

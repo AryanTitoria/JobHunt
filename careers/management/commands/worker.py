@@ -1,7 +1,7 @@
 import time
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections
-from careers.services.queue import claim, execute
+from careers.services.queue import claim, execute, INTERACTIVE_KINDS
 
 
 class Command(BaseCommand):
@@ -9,6 +9,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--once', action='store_true', help='Drain queued tasks and exit')
+        parser.add_argument('--lane',choices=['all','interactive','collection'],default='all')
         parser.add_argument('--poll', type=float, default=2)
 
     def handle(self, *args, **options):
@@ -16,7 +17,8 @@ class Command(BaseCommand):
         try:
             while True:
                 close_old_connections()
-                task = claim()
+                kinds=INTERACTIVE_KINDS if options['lane']=='interactive' else ('collect',) if options['lane']=='collection' else None
+                task = claim(kinds=kinds)
                 if task:
                     ok = execute(task)
                     self.stdout.write(f'{task.kind}: {"completed" if ok else "failed"}')

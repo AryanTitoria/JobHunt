@@ -146,6 +146,8 @@ class JobState(models.Model):
 
 
 class Analysis(models.Model):
+    input_signature = models.CharField(max_length=64, blank=True)
+    compatibility = models.JSONField(default=dict)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     resume = models.ForeignKey(Resume, on_delete=models.CASCADE)
     job = models.ForeignKey(Job, on_delete=models.CASCADE)
@@ -207,6 +209,10 @@ class ParseCache(models.Model):
 
 
 class TailoredResume(models.Model):
+    ai_state = models.CharField(max_length=20, default='not_requested')
+    ai_last_attempt = models.DateTimeField(null=True, blank=True)
+    provider = models.CharField(max_length=50, blank=True)
+    model = models.CharField(max_length=100, blank=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     job = models.ForeignKey(Job, on_delete=models.CASCADE)
     key = models.CharField(max_length=64, unique=True)

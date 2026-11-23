@@ -20,23 +20,21 @@
   if(scope)scope.addEventListener('change',explainScope);explainScope();
   const errors=document.querySelector('form .alert.error');if(errors){errors.focus();errors.scrollIntoView({block:'center'});}
   if (document.body.dataset.poll !== 'true') return;
-  let hadPending = true;
-  let attempts = 0;
-  const status = document.getElementById('poll-status');
-  const poll = async () => {
-    if (++attempts > 180) {
-      if (status) status.textContent = 'This is taking longer than usual. You can keep browsing and check back later.';
-      return;
-    }
-    try {
-      const response = await fetch(document.body.dataset.pollUrl, {credentials: 'same-origin', headers: {'Accept': 'application/json'}});
-      if (!response.ok) return;
-      const data = await response.json();
-      const pending = data.tasks.some(task => ['queued', 'running'].includes(task.status));
-      if (hadPending && !pending) { window.location.reload(); return; }
-      hadPending = pending;
-    } catch (_) { /* The page remains useful when a connection drops. */ }
-    window.setTimeout(poll, 3500);
+  let attempts=0;
+  const status=document.getElementById('poll-status');
+  const poll=async()=>{
+    if(++attempts>240){if(status)status.textContent='Still running. You can refresh later or continue browsing.';return;}
+    let done=false;
+    try{
+      const response=await fetch(document.body.dataset.pollUrl,{credentials:'same-origin',headers:{'Accept':'application/json'}});
+      if(!response.ok)throw new Error('Status unavailable');
+      const data=await response.json();
+      const pending=typeof data.pending_count==='number'?data.pending_count>0:data.tasks.some(task=>['queued','running'].includes(task.status));
+      if(!pending){done=true;window.location.reload();return;}
+      const running=data.tasks.find(task=>task.status==='running');
+      if(status&&running)status.textContent=running.kind==='tailor'?'AI is composing and verifying your draft…':running.kind==='analysis'?'AI is comparing the selected resume with this posting…':'Working in the background…';
+    }catch(_){if(status)status.textContent='Connection interrupted. Retrying status automatically…';}
+    finally{if(!done)window.setTimeout(poll,document.hidden?8000:3000);}
   };
-  window.setTimeout(poll, 2000);
+  window.setTimeout(poll,1500);
 })();

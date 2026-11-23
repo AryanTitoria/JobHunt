@@ -18,7 +18,7 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe run.py --demo
 ```
 
-Open **http://127.0.0.1:8000**, create an account, answer the Search questionnaire, and upload `examples/resume.txt` as a fictional resume reference. The launcher applies migrations and starts the web app with a managed development worker. Ctrl+C stops both. No activation or PowerShell execution-policy change is necessary. On macOS/Linux replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
+Open **http://127.0.0.1:8000**, create an account, answer the Search questionnaire, and upload `examples/resume.txt` as a fictional resume reference. The launcher applies migrations and starts the web app with separate managed collection and interactive workers. Ctrl+C stops both. No activation or PowerShell execution-policy change is necessary. On macOS/Linux replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
 
 `--demo` uses a separate database in `data/demo/` and clearly labelled fictional jobs, including examples from non-technical fields. It does **not** use an offline AI model. You can enable a real hosted model in this demo, or use the essential non-AI guidance without keys. The bundled example resume is fictional, not your private resume.
 
@@ -97,16 +97,17 @@ Job inventory is deduplicated by canonical URL and conservative exact-content id
 
 ## Worker and scheduled collection
 
-The launcher starts the web app and a managed worker thread for local development. On a host, run them separately:
+The launcher starts the web app and two managed worker threads for local development. On a host, run them separately:
 
 ```text
 python manage.py migrate
 python manage.py collectstatic --noinput
 gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 60 platform_config.wsgi:application
-python manage.py worker
+python manage.py worker --lane collection
+python manage.py worker --lane interactive
 ```
 
-The worker handles durable database-backed tasks, so discovery and AI requests do not block web requests. Run one worker initially. `python manage.py worker --once` drains pending tasks and exits. Failed tasks retain a safe message and can be retried. Stale running tasks become retryable after 30 minutes.
+The worker handles durable database-backed tasks, so discovery and AI requests do not block web requests. Keep both lanes running so a long collection cannot delay an AI review. `python manage.py worker --once` drains pending tasks and exits. Failed tasks retain a safe message and can be retried. Stale running tasks become retryable after 30 minutes.
 
 Schedule `python manage.py collect_jobs` hourly or daily on your deployment platform to update the shared inventory and refresh every user's matches. This repository does not create a schedule automatically. Respect source cooldowns; Remotive is not polled more than once per six hours.
 
@@ -199,17 +200,27 @@ Resume parsing recognizes summary, skills, employment, internships, projects, ed
 
 1. Upload one or more master resume versions under **Resume reference**. An optional version date is an explicit user answer; upload time never settles conflicts.
 2. Open a job or internship. Review the parsed requirements and choose up to five master resumes.
-3. Select **Build source-backed draft**. The engine selects/reorders existing source content and preserves its wording. It does not invent, strengthen claims, add missing JD skills, or rewrite numbers/dates/tools.
-4. Review the evidence ledger, requirement mapping, skill gaps, changes log and detected conflicts. Download the requested JSON schema or use browser Print / Save PDF.
+3. Select **Generate tailored resume with AI** or **Build factual draft**. The engine selects and reorders existing source content. AI may propose conservative wording changes, validated against cited originals. It does not invent, strengthen claims, add missing JD skills, or rewrite numbers/dates/tools.
+4. Review the evidence ledger, requirement mapping, skill gaps, changes log and detected conflicts. Use **Download resume PDF** for a selectable-text, single-column PDF, or download the evidence JSON. The application PDF omits internal citations, scores and gap notes.
 
-All candidate facts are validated against cited sources. Identical facts may share citations; differently named projects are kept separate. Detected conflicts are omitted unless all conflicting masters have distinct, explicit version dates, allowing a most-recent version to be selected. Conflict detection is conservative and not exhaustive; review source facts. Ambiguous source structure can produce an incomplete draft, which is preferred to fabricated content. The engine uses exact original wording rather than unrestricted AI rephrasing.
+All candidate facts are validated against cited sources. Identical facts may share citations; differently named projects are kept separate. Detected conflicts are omitted unless all conflicting masters have distinct, explicit version dates, allowing a most-recent version to be selected. Conflict detection is conservative and not exhaustive; review source facts. Ambiguous source structure can produce an incomplete draft, which is preferred to fabricated content. A conservative validator rejects unsupported wording, changed numbers, tools, dates and stronger claims; rejected proposals retain their original wording. These checks are not a guarantee of semantic correctness: review every draft before applying.
 
 ### Optional hosted assistance
 
-Enable the separate parser/selection AI consent in the questionnaire. **Interpret unclear requirements** queues a cached model request for exact JD evidence. Unsupported quotations are rejected and AI never silently changes discovery eligibility. **Use optional AI to order supported items** permits a model to return source IDs only. Code assembles and validates the candidate facts; model-written resume claims are never accepted. Both use the existing configured online providers, quotas and cooldowns. Cached requests do not consume another model call. Failure falls back to source-preserving rules. No offline model is installed.
+Enable AI consent in the questionnaire before explicitly requesting hosted assistance. **Interpret unclear requirements** queues a cached model request for exact JD evidence. Unsupported quotations are rejected and AI never silently changes discovery eligibility. **Generate tailored resume with AI** requests source ordering and grounded wording proposals. Code assembles and validates candidate facts; arbitrary model-written resume content is rejected. Both use the existing configured online providers, quotas and cooldowns. Cached requests do not consume another model call. Failure falls back to source-preserving rules. No offline model is installed.
 
 Drafts, evidence ledgers and downloads belong to the authenticated owner. Deleting resume data also removes drafts and parser caches. Source-backed tailoring does not guarantee that the candidate qualifies or that every contradiction was recognized.
 
 ### Questionnaire research
 
 The design was informed by official descriptions of job titles, work areas, employment types, education/qualifications, location settings and availability in [Indeed profile preferences](https://www.indeed.com/help/job-seekers/articles/32603395892109-adding-or-editing-job-search-preferences?co=US&hl=en) and [LinkedIn job recommendations](https://www.linkedin.com/help/linkedin/answer/a512279/). JobSearch implements its own explicit-answer search policy; it does not copy those platforms' recommendation algorithms.
+
+### Resume-specific compatibility and interactive reviews
+
+On a selected job, choose a master resume and press **Compare**. The report uses that resume text, never questionnaire skills. Discovery still follows questionnaire answers. Cached reports are invalidated when resume text, job content or scoring version changes.
+
+Default weights are required skills 35, preferred skills 10, relevant evidence 15, professional experience 20, education 10, relevant projects 5 and text readability 5. Employment, internships and projects are distinguished. Evidence in work/project bullets is stronger than a keyword list. Unknown employer criteria are excluded and remaining weights normalized; insufficient descriptions show no score. This is an advisory estimate, not a validated employer ATS result or hiring probability.
+
+Interactive tasks use a separate worker lane from collection. Buttons show queued/running/ready/failed states and prevent duplicate requests. Provider quota/model/key failures display an explanation. Successful AI results are cached. Failed tailoring can be retried after two minutes; a factual PDF remains available. ReportLab generates the PDF on the server.
+
+Validation: 203 automated tests, local HTTP workflow, desktop/mobile layout checks, PDF extraction and rendering, and successful live Gemini review/tailoring using fictional candidate data.

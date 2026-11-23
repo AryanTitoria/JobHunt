@@ -1,6 +1,6 @@
 {% load static %}<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Find jobs that fit your background, understand the gaps, and tailor your resume with JobSearch."><title>{% block title %}JobSearch — Make your next move{% endblock %}</title><link rel="stylesheet" href="{% static 'JobSearch/app.css' %}"><script defer src="{% static 'JobSearch/app.js' %}"></script></head>
-<body {% if pending_tasks %}data-poll="true" data-poll-url="{% url 'task-status' %}"{% endif %}>
+<body {% if pending_tasks %}data-poll="true" data-poll-url="{% if poll_url %}{{ poll_url }}{% else %}{% url 'task-status' %}{% endif %}"{% endif %}>
 <a class="skip-link" href="#main">Skip to content</a>
 {% if user.is_authenticated %}
 <div class="app-shell"><aside class="sidebar"><a class="wordmark" href="{% url 'jobs' %}"><span class="brand-symbol">JS</span>JobSearch<span class="brand-dot">.</span></a><span class="workspace-label">YOUR WORKSPACE</span><nav aria-label="Main navigation">

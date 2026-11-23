@@ -127,15 +127,10 @@ def evaluate(job, resume, preferences, eligibility_only=False):
     result = search_evaluate(job, preferences)
     if eligibility_only or resume is None:
         return result
-    # This comparison runs only for a selected posting's resume advice.
-    candidate_skills = preferences.skills or resume.profile.get('core_skills', [])
-    jd = f'{job.title}\n{job.description}'
-    job_skills = extract_skills(jd)
-    matched = [skill for skill in candidate_skills if any(contains(jd, alias) for alias in SKILLS.get(skill, [skill]))]
-    candidate_terms = {skill.casefold() for skill in candidate_skills}
-    missing = [skill for skill in job_skills if skill.casefold() not in candidate_terms]
-    result.update(score=min(100, round(100 * len(matched) / max(1, len(job_skills)))),
-                  matched_skills=matched[:30], missing_skills=missing[:20])
+    from .compatibility import report
+    comparison=report(job,resume)
+    result.update(score=comparison['score'],matched_skills=comparison['matched_skills'],
+                  missing_skills=comparison['missing_skills'],compatibility=comparison)
     return result
 
 

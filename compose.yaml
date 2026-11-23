@@ -38,10 +38,21 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://JobSearch:${POSTGRES_PASSWORD}@db:5432/JobSearch
-    command: [python, manage.py, worker]
+    command: [python, manage.py, worker, --lane, collection]
     depends_on:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+  ai-worker:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://JobSearch:${POSTGRES_PASSWORD}@db:5432/JobSearch
+    command: [python, manage.py, worker, --lane, interactive]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   database:
